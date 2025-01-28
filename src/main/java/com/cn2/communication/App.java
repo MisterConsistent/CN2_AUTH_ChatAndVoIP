@@ -5,6 +5,12 @@ import java.net.*;
 
 import javax.swing.JFrame;
 import javax.swing.JTextField;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.DataLine;
+import javax.sound.sampled.LineUnavailableException;
+import javax.sound.sampled.SourceDataLine;
+import javax.sound.sampled.TargetDataLine;
 import javax.swing.JButton;
 import javax.swing.JTextArea;
 import javax.swing.JScrollPane;
@@ -31,7 +37,75 @@ public class App extends Frame implements WindowListener, ActionListener {
 	static JButton callButton;				
 	
 	// TODO: Please define and initialize your variables here...
+	// TODO: Please define and initialize your variables here...
+
 	
+	private DatagramSocket socket; 
+	private InetAddress remoteAddress; 
+	private int remotePort = 12345; 
+
+	
+	private TargetDataLine microphone; 
+	private SourceDataLine speaker; 
+	private AudioFormat audioFormat; 
+
+	
+	private Thread messageListeningThread; 
+	private Thread voiceListeningThread; 
+
+	
+	private static final int SAMPLE_RATE = 8000; 
+	private static final int SAMPLE_SIZE = 8; 
+	private static final int CHANNELS = 1; 
+
+	private void initializeAudio() {
+	    try {	
+	        // Ορισμός μορφής ήχου
+	        audioFormat = new AudioFormat(SAMPLE_RATE, SAMPLE_SIZE, CHANNELS, true, false);
+
+	        // Ρύθμιση μικροφώνου
+	        DataLine.Info micInfo = new DataLine.Info(TargetDataLine.class, audioFormat);
+	        microphone = (TargetDataLine) AudioSystem.getLine(micInfo);
+	        microphone.open(audioFormat);
+	        microphone.start();
+
+	        // Ρύθμιση ηχείου
+	        DataLine.Info speakerInfo = new DataLine.Info(SourceDataLine.class, audioFormat);
+	        speaker = (SourceDataLine) AudioSystem.getLine(speakerInfo);
+	        speaker.open(audioFormat);
+	        speaker.start();
+
+	        textArea.append("Audio initialized successfully.\n");
+
+	    } catch (LineUnavailableException ex) {
+	        textArea.append("Error initializing audio: " + ex.getMessage() + newline);
+	    }
+	}
+	private void sendVoice() {
+	    byte[] buffer = new byte[1024];
+	    try {
+	        while (true) {
+	            int bytesRead = microphone.read(buffer, 0, buffer.length);
+	            DatagramPacket packet = new DatagramPacket(buffer, bytesRead, remoteAddress, remotePort);
+	            socket.send(packet);
+	        }
+	    } catch (IOException ex) {
+	        textArea.append("Error sending voice data: " + ex.getMessage() + newline);
+	    }
+	}
+	private void listenForVoice() {
+	    byte[] buffer = new byte[1024];
+	    try {
+	        while (true) {
+	            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+	            socket.receive(packet);
+	            speaker.write(packet.getData(), 0, packet.getLength());
+	        }
+	    } catch (IOException ex) {
+	        textArea.append("Error receiving voice data: " + ex.getMessage() + newline);
+	    }
+	}
+
 	/**
 	 * Construct the app's frame and initialize important parameters
 	 */
@@ -91,14 +165,42 @@ public class App extends Frame implements WindowListener, ActionListener {
 		 */
 		App app = new App("CN2 - AUTH");  // TODO: You can add the title that will displayed on the Window of the App here																		  
 		app.setSize(500,250);				  
-		app.setVisible(true);				  
+		app.setVisible(true);
+		try {
+	        app.socket = new DatagramSocket(12346); 
+	        app.remoteAddress = InetAddress.getByName("127.0.0.1"); 
+	        app.remotePort = 12345; 
+	        app.textArea.append("Application started. Listening on port 12345." + newline);
+	    } catch (SocketException | UnknownHostException ex) {
+	        app.textArea.append("Error initializing socket: " + ex.getMessage() + newline);
+	        return;
+	    }
 
 		/*
 		 * 2. 
 		 */
-		do{		
-			// TODO: Your code goes here...
-		}while(true);
+		do {
+	        try {
+	            // 3.1 Λήψη εισερχόμενων πακέτων
+	            byte[] buffer = new byte[1024];
+	            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+	            app.socket.receive(packet);
+
+	            // 3.2 Επεξεργασία των δεδομένων
+	            String message = new String(packet.getData(), 0, packet.getLength());
+	            app.textArea.append("Remote: " + message + newline);
+
+	        } catch (IOException ex) {
+	            app.textArea.append("Error receiving data: " + ex.getMessage() + newline);
+	        }
+
+	        // 3.3 Μικρή καθυστέρηση για να μην επιβαρύνεται το σύστημα
+	        try {
+	            Thread.sleep(100); // 100 ms delay
+	        } catch (InterruptedException e) {
+	            Thread.currentThread().interrupt();
+	        }
+	    } while (true);
 	}
 	
 	/**
@@ -115,16 +217,38 @@ public class App extends Frame implements WindowListener, ActionListener {
 		 */
 		if (e.getSource() == sendButton){
 			
-			// The "Send" button was clicked
-			
-			// TODO: Your code goes here...
+			 String message = inputTextField.getText();
+		        if (message.isEmpty() || socket == null) {
+		            textArea.append("Cannot send message. Socket is not initialized.\n");
+		            return;
+		        }
+
+		        try {
+		            byte[] buffer = message.getBytes();
+		            DatagramPacket packet = new DatagramPacket(buffer, buffer.length, remoteAddress, remotePort);
+		            socket.send(packet);
+
+		            textArea.append("Local: " + message + newline);
+		            inputTextField.setText(""); 
+		        } catch (IOException ex) {
+		            textArea.append("Error sending message: " + ex.getMessage() + newline);
+		        }
 		
 			
 		}else if(e.getSource() == callButton){
 			
-			// The "Call" button was clicked
-			
-			// TODO: Your code goes here...
+			if (microphone == null || speaker == null) {
+	            initializeAudio();
+	        }
+
+	        // Εκκίνηση νημάτων για αποστολή και λήψη φωνής
+	        voiceListeningThread = new Thread(this::listenForVoice);
+	        voiceListeningThread.start();
+
+	        Thread voiceSendingThread = new Thread(this::sendVoice);
+	        voiceSendingThread.start();
+
+	        textArea.append("VoIP communication started.\n");
 			
 			
 		}
